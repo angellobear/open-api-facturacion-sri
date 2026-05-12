@@ -374,10 +374,12 @@ export class EmisoresService {
     }
 
     // Guardar el certificado
+    const encryptedPassword = await this.encryptionService.encrypt(password);
     const result = await this.db.query(
       `UPDATE emisores SET
         certificado_p12 = $1,
-        certificado_password = $2,
+        certificado_password = NULL,
+        certificado_password_encrypted = $2,
         certificado_valido_hasta = $3,
         certificado_sujeto = $4,
         certificado_updated_at = NOW(),
@@ -391,7 +393,7 @@ export class EmisoresService {
                  created_at, updated_at`,
       [
         file,
-        await this.encryptionService.encrypt(password),
+        encryptedPassword,
         certificateInfo.validoHasta,
         certificateInfo.sujeto,
         id,
@@ -410,6 +412,7 @@ export class EmisoresService {
       `UPDATE emisores SET
         certificado_p12 = NULL,
         certificado_password = NULL,
+        certificado_password_encrypted = NULL,
         certificado_valido_hasta = NULL,
         certificado_sujeto = NULL,
         certificado_updated_at = NULL,

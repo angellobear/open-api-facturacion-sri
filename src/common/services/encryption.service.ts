@@ -3,15 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
 import { promisify } from 'util';
 
-/**
- * Servicio centralizado de encriptación/desencriptación AES-256-CBC.
- *
- * Utiliza:
- * - ENCRYPTION_KEY (requerida): clave de 32 bytes para AES-256
- * - ENCRYPTION_SALT (requerida): salt para derivación de clave con scrypt
- *
- * Formato de salida: "iv_hex:encrypted_hex"
- */
 @Injectable()
 export class EncryptionService {
   private readonly logger = new Logger(EncryptionService.name);
@@ -32,10 +23,6 @@ export class EncryptionService {
     this.logger.log('EncryptionService inicializado correctamente');
   }
 
-  /**
-   * Deriva la clave de encriptación usando scrypt.
-   * Cachea el resultado para evitar derivaciones repetidas.
-   */
   private async deriveKey(): Promise<Buffer> {
     if (this.keyCache) {
       return this.keyCache;
@@ -51,46 +38,67 @@ export class EncryptionService {
     return this.keyCache;
   }
 
-  /**
-   * Encripta un texto plano usando AES-256-CBC.
-   * @param plainText - Texto a encriptar
-   * @returns Texto encriptado en formato "iv_hex:encrypted_hex"
-   */
   async encrypt(plainText: string): Promise<string> {
     const iv = randomBytes(16);
     const key = await this.deriveKey();
-    const cipher = createCipheriv('aes-256-cbc', key, iv);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
     const encrypted = Buffer.concat([
       cipher.update(plainText, 'utf8'),
       cipher.final(),
     ]);
+    const authTag = cipher.getAuthTag();
 
-    return iv.toString('hex') + ':' + encrypted.toString('hex');
+    return (
+      iv.toString('hex') +
+      ':' +
+      encrypted.toString('hex') +
+      ':' +
+      authTag.toString('hex')
+    );
   }
 
-  /**
-   * Desencripta un texto encriptado con AES-256-CBC.
-   * @param encryptedText - Texto en formato "iv_hex:encrypted_hex"
-   * @returns Texto plano original
-   */
   async decrypt(encryptedText: string): Promise<string> {
-    const [ivHex, encryptedHex] = encryptedText.split(':');
+    const parts = encryptedText.split(':');
 
-    if (!ivHex || !encryptedHex) {
-      throw new Error(
-        'Formato de texto encriptado inválido. Se esperaba "iv:encrypted"',
-      );
+    if (parts.length === 3) {
+      const [ivHex, encryptedHex, authTagHex] = parts;
+      const iv = Buffer.from(ivHex, 'hex');
+      const encrypted = Buffer.from(encryptedHex, 'hex');
+      const authTag = Buffer.from(authTagHex, 'hex');
+      const key = await this.deriveKey();
+      const decipher = createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(authTag);
+      const decrypted = Buffer.concat([
+        decipher.update(encrypted),
+        decipher.final(),
+      ]);
+
+      return decrypted.toString('utf8');
     }
 
-    const iv = Buffer.from(ivHex, 'hex');
-    const encrypted = Buffer.from(encryptedHex, 'hex');
-    const key = await this.deriveKey();
-    const decipher = createDecipheriv('aes-256-cbc', key, iv);
-    const decrypted = Buffer.concat([
-      decipher.update(encrypted),
-      decipher.final(),
-    ]);
+    // Legacy CBC format (iv:encrypted — no auth tag): try to decrypt
+    if (parts.length === 2) {
+      const [ivHex, encryptedHex] = parts;
+      try {
+        const iv = Buffer.from(ivHex, 'hex');
+        const encrypted = Buffer.from(encryptedHex, 'hex');
+        const key = await this.deriveKey();
+        const decipher = createDecipheriv('aes-256-cbc', key, iv);
+        const decrypted = Buffer.concat([
+          decipher.update(encrypted),
+          decipher.final(),
+        ]);
 
-    return decrypted.toString('utf8');
+        return decrypted.toString('utf8');
+      } catch {
+        throw new Error(
+          'Formato de texto encriptado inválido o clave incorrecta',
+        );
+      }
+    }
+
+    throw new Error(
+      'Formato de texto encriptado inválido. Se esperaba "iv:encrypted:authTag" o "iv:encrypted"',
+    );
   }
 }

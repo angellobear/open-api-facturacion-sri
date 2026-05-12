@@ -11,6 +11,8 @@ import { join } from 'path';
 export class XmlStorageService implements OnModuleInit {
   private readonly logger = new Logger(XmlStorageService.name);
   private readonly baseDir: string;
+  private static readonly RUC_REGEX = /^\d{13}$/;
+  private static readonly CLAVE_REGEX = /^\d{49}$/;
 
   constructor(private readonly configService: ConfigService) {
     this.baseDir =
@@ -57,6 +59,15 @@ export class XmlStorageService implements OnModuleInit {
     tipo: 'sin_firma' | 'firmado' | 'autorizado',
     xmlContent: string,
   ): string {
+    // Validate RUC and clave de acceso to prevent path traversal
+    if (!XmlStorageService.RUC_REGEX.test(ruc)) {
+      throw new Error(`RUC inválido: ${ruc}. Debe tener 13 dígitos.`);
+    }
+    if (!XmlStorageService.CLAVE_REGEX.test(claveAcceso)) {
+      throw new Error(
+        `Clave de acceso inválida: ${claveAcceso}. Debe tener 49 dígitos.`,
+      );
+    }
     // Map tipo to subdirectory name
     const subdirMap: Record<string, string> = {
       sin_firma: 'sin_firmar',

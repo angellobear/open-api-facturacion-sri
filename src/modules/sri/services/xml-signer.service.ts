@@ -7,7 +7,7 @@ import * as forge from 'node-forge';
 import { Crypto } from '@peculiar/webcrypto';
 import * as xadesjs from 'xadesjs';
 import * as xmlCore from 'xml-core';
-import { DOMParser, XMLSerializer } from 'xmldom';
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { DatabaseService } from '../../../database';
 import { EncryptionService } from '../../../common/services/encryption.service';
 import { STORAGE_PATHS } from '../../../common/utils/storage-paths';

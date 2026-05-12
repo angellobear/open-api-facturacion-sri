@@ -48,9 +48,7 @@ export class AuditInterceptor implements NestInterceptor {
     const user = (request as Request & { user?: RequestUser }).user;
     const url = request.url || '';
     const recurso = this.extractRecurso(url);
-    const recursoId =
-      (request.params?.['id'] as string) ||
-      (request.params?.['claveAcceso'] as string);
+    const recursoId = request.params?.['id'] || request.params?.['claveAcceso'];
     const accion = this.methodToAccion(method, url);
 
     return next.handle().pipe(

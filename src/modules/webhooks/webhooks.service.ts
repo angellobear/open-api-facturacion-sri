@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -12,10 +13,12 @@ import {
   CreateWebhookDto,
   UpdateWebhookDto,
   WebhookResponseDto,
+  WebhookCreatedResponseDto,
   WebhookLogResponseDto,
   WebhookEvent,
 } from './dto';
 import { WebhookJobData } from './webhook.processor';
+import { JwtPayload, UserRole } from '../auth/dto/auth.dto';
 
 @Injectable()
 export class WebhooksService {
@@ -25,10 +28,6 @@ export class WebhooksService {
     private readonly db: DatabaseService,
     @InjectQueue('webhook-dispatch') private readonly webhookQueue: Queue,
   ) {}
-
-  // =====================
-  // Event Listeners
-  // =====================
 
   @OnEvent('comprobante.autorizado')
   async handleComprobanteAutorizado(payload: any) {
@@ -54,10 +53,6 @@ export class WebhooksService {
     );
   }
 
-  // =====================
-  // CRUD Operations
-  // =====================
-
   async findAll(emisorId?: string): Promise<WebhookResponseDto[]> {
     let query = `
       SELECT id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, tenant_id, created_at, updated_at
@@ -73,12 +68,11 @@ export class WebhooksService {
     query += ` ORDER BY created_at DESC`;
 
     const result = await this.db.query(query, params);
-    return result.rows.map((row: Record<string, unknown>) => this.mapToResponse(row));
+    return result.rows.map((row: Record<string, unknown>) =>
+      this.mapToResponse(row, true),
+    );
   }
 
-  /**
-   * Listado filtrado por tenant — previene fuga de datos multi-tenant
-   */
   async findAllByTenant(
     tenantId: string,
     emisorId?: string,
@@ -98,12 +92,14 @@ export class WebhooksService {
     query += ` ORDER BY created_at DESC`;
 
     const result = await this.db.query(query, params);
-    return result.rows.map((row: Record<string, unknown>) => this.mapToResponse(row));
+    return result.rows.map((row: Record<string, unknown>) =>
+      this.mapToResponse(row, true),
+    );
   }
 
   async findOne(id: string): Promise<WebhookResponseDto> {
     const result = await this.db.query(
-      `SELECT id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, created_at, updated_at
+      `SELECT id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, tenant_id, created_at, updated_at
        FROM webhook_configs
        WHERE id = $1`,
       [id],
@@ -113,10 +109,29 @@ export class WebhooksService {
       throw new NotFoundException(`Webhook con ID ${id} no encontrado`);
     }
 
-    return this.mapToResponse(result.rows[0]);
+    return this.mapToResponse(result.rows[0], true);
   }
 
-  async create(dto: CreateWebhookDto, tenantId?: string): Promise<WebhookResponseDto> {
+  async findOneSecured(
+    id: string,
+    user: JwtPayload,
+  ): Promise<WebhookResponseDto> {
+    const webhook = await this.findOne(id);
+
+    if (
+      user.rol !== UserRole.SUPERADMIN &&
+      webhook.tenantId !== user.tenantId
+    ) {
+      throw new NotFoundException(`Webhook con ID ${id} no encontrado`);
+    }
+
+    return webhook;
+  }
+
+  async create(
+    dto: CreateWebhookDto,
+    tenantId?: string,
+  ): Promise<WebhookCreatedResponseDto> {
     const secreto = this.generateSecret();
 
     const result = await this.db.query(
@@ -135,7 +150,7 @@ export class WebhooksService {
     );
 
     this.logger.log(`Webhook creado: ${dto.nombre} -> ${dto.url}`);
-    return this.mapToResponse(result.rows[0]);
+    return this.mapToCreatedResponse(result.rows[0]);
   }
 
   async update(id: string, dto: UpdateWebhookDto): Promise<WebhookResponseDto> {
@@ -176,18 +191,17 @@ export class WebhooksService {
     const result = await this.db.query(
       `UPDATE webhook_configs SET ${updates.join(', ')}
        WHERE id = $${paramIndex}
-       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, created_at, updated_at`,
+       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, tenant_id, created_at, updated_at`,
       values,
     );
 
     this.logger.log(`Webhook actualizado: ${id}`);
-    return this.mapToResponse(result.rows[0]);
+    return this.mapToResponse(result.rows[0], true);
   }
 
   async delete(id: string): Promise<WebhookResponseDto> {
     const webhook = await this.findOne(id);
 
-    // El recurso existe pero está inactivo — 400, no 404
     if (!webhook.activo) {
       throw new BadRequestException('El webhook ya se encuentra inactivo');
     }
@@ -195,30 +209,29 @@ export class WebhooksService {
     const result = await this.db.query(
       `UPDATE webhook_configs SET activo = false, updated_at = NOW()
        WHERE id = $1
-       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, created_at, updated_at`,
+       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, tenant_id, created_at, updated_at`,
       [id],
     );
 
     this.logger.log(`Webhook inactivado: ${id}`);
-    return this.mapToResponse(result.rows[0]);
+    return this.mapToResponse(result.rows[0], true);
   }
 
-  async regenerateSecret(id: string): Promise<WebhookResponseDto> {
+  async regenerateSecret(id: string): Promise<WebhookCreatedResponseDto> {
     await this.findOne(id);
     const newSecret = this.generateSecret();
 
     const result = await this.db.query(
       `UPDATE webhook_configs SET secreto = $1, updated_at = NOW()
        WHERE id = $2
-       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, created_at, updated_at`,
+       RETURNING id, nombre, url, eventos, emisor_id, secreto, activo, reintentos_max, tenant_id, created_at, updated_at`,
       [newSecret, id],
     );
 
     this.logger.log(`Secreto regenerado para webhook: ${id}`);
-    return this.mapToResponse(result.rows[0]);
+    return this.mapToCreatedResponse(result.rows[0]);
   }
 
-  // Paginación completa para logs de webhooks
   async getLogs(
     id: string,
     page = 1,
@@ -231,14 +244,13 @@ export class WebhooksService {
   }> {
     await this.findOne(id);
 
-    if (limit > 100) limit = 100; // tope máximo para evitar queries pesados
+    if (limit > 100) limit = 100;
     const offset = (page - 1) * limit;
 
     const [countResult, dataResult] = await Promise.all([
-      this.db.query(
-        `SELECT COUNT(*) FROM webhook_logs WHERE config_id = $1`,
-        [id],
-      ),
+      this.db.query(`SELECT COUNT(*) FROM webhook_logs WHERE config_id = $1`, [
+        id,
+      ]),
       this.db.query(
         `SELECT id, evento, payload, status_code, respuesta, intento, exitoso, error, tiempo_respuesta_ms, created_at
          FROM webhook_logs
@@ -260,20 +272,11 @@ export class WebhooksService {
     };
   }
 
-  // =====================
-  // Event Dispatching (BullMQ-based)
-  // =====================
-
-  /**
-   * Despacha webhooks a la cola BullMQ en vez de usar setTimeout.
-   * BullMQ gestiona reintentos con backoff exponencial nativo.
-   */
   async emit(
     evento: WebhookEvent,
     payload: Record<string, unknown>,
     emisorId?: string,
   ): Promise<void> {
-    // Buscar webhooks suscritos a este evento
     let query = `
       SELECT id, url, secreto, reintentos_max
       FROM webhook_configs
@@ -289,14 +292,13 @@ export class WebhooksService {
     const configs = await this.db.query(query, params);
 
     if (configs.rows.length === 0) {
-      return; // No hay webhooks suscritos
+      return;
     }
 
     this.logger.log(
       `Encolando evento ${evento} a ${configs.rows.length} webhook(s)`,
     );
 
-    // Encolar cada webhook como job de BullMQ
     for (const config of configs.rows) {
       const jobData: WebhookJobData = {
         configId: config.id as string,
@@ -306,45 +308,49 @@ export class WebhooksService {
         payload,
       };
 
-      await this.webhookQueue.add(
-        `webhook-${evento}`,
-        jobData,
-        {
-          attempts: (config.reintentos_max as number) || 5,
-          backoff: {
-            type: 'exponential',
-            delay: 3000,
-          },
+      await this.webhookQueue.add(`webhook-${evento}`, jobData, {
+        attempts: (config.reintentos_max as number) || 5,
+        backoff: {
+          type: 'exponential',
+          delay: 3000,
         },
-      );
+      });
     }
   }
-
-  // =====================
-  // Helpers
-  // =====================
 
   private generateSecret(): string {
     const crypto = require('crypto') as typeof import('crypto');
     return 'whsec_' + crypto.randomBytes(24).toString('hex');
   }
 
-  private mapToResponse(row: Record<string, unknown>): WebhookResponseDto {
+  private mapToResponse(
+    row: Record<string, unknown>,
+    maskSecret = false,
+  ): WebhookResponseDto {
     return {
       id: row.id as string,
       nombre: row.nombre as string,
       url: row.url as string,
       eventos: row.eventos as string[],
       emisorId: row.emisor_id as string,
-      secreto: row.secreto as string,
+      secreto: maskSecret ? 'whsec_****' : (row.secreto as string),
       activo: row.activo as boolean,
       reintentosMax: row.reintentos_max as number,
+      tenantId: row.tenant_id as string | undefined,
       createdAt: (row.created_at as Date)?.toISOString(),
       updatedAt: (row.updated_at as Date)?.toISOString(),
     };
   }
 
-  private mapLogToResponse(row: Record<string, unknown>): WebhookLogResponseDto {
+  private mapToCreatedResponse(
+    row: Record<string, unknown>,
+  ): WebhookCreatedResponseDto {
+    return this.mapToResponse(row, false) as WebhookCreatedResponseDto;
+  }
+
+  private mapLogToResponse(
+    row: Record<string, unknown>,
+  ): WebhookLogResponseDto {
     return {
       id: row.id as string,
       evento: row.evento as string,
@@ -359,4 +365,3 @@ export class WebhooksService {
     };
   }
 }
-

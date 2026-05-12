@@ -6,11 +6,12 @@ import {
   Res,
   BadRequestException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve } from 'path';
 import {
   ApiTags,
   ApiOperation,
@@ -28,6 +29,7 @@ import { STORAGE_PATHS } from '../../common/utils/storage-paths';
 @Controller('signature')
 export class SignatureController {
   private readonly publicUrl: string;
+  private readonly logger = new Logger(SignatureController.name);
 
   constructor(
     private readonly signatureService: SignatureService,
@@ -91,7 +93,7 @@ export class SignatureController {
 
       // Log warning if certificate expires soon
       if (validation.warning) {
-        console.warn(`ADVERTENCIA: ${validation.warning}`);
+        this.logger.warn(`ADVERTENCIA: ${validation.warning}`);
       }
     } catch (certError) {
       if (certError instanceof BadRequestException) {
@@ -112,6 +114,14 @@ export class SignatureController {
         throw new NotFoundException('Archivo PDF no encontrado');
       }
     }
+
+    // Path traversal protection: ensure resolved path stays within pdfDir
+    const resolvedPath = resolve(pdfPath);
+    const allowedBase = resolve(this.pdfDir);
+    if (!resolvedPath.startsWith(allowedBase)) {
+      throw new NotFoundException('Archivo PDF no encontrado');
+    }
+    pdfPath = resolvedPath;
 
     // Read PDF
     const pdfBuffer = readFileSync(pdfPath);
@@ -201,7 +211,7 @@ export class SignatureController {
       }
 
       if (validation.warning) {
-        console.warn(`ADVERTENCIA: ${validation.warning}`);
+        this.logger.warn(`ADVERTENCIA: ${validation.warning}`);
       }
     } catch (certError) {
       if (certError instanceof BadRequestException) {
@@ -308,7 +318,7 @@ export class SignatureController {
       }
 
       if (validation.warning) {
-        console.warn(`ADVERTENCIA: ${validation.warning}`);
+        this.logger.warn(`ADVERTENCIA: ${validation.warning}`);
       }
     } catch (certError) {
       if (certError instanceof BadRequestException) {

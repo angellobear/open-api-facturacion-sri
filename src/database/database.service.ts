@@ -29,7 +29,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         password: this.configService.get<string>('database.password'),
         ssl:
           this.configService.get('database.ssl') === 'true'
-            ? { rejectUnauthorized: false }
+            ? {
+                rejectUnauthorized:
+                  this.configService.get('nodeEnv') === 'production',
+              }
             : undefined,
         // Pool configurable desde .env
         max: this.configService.get<number>('DB_POOL_MAX', 10),

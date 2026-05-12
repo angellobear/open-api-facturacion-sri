@@ -76,11 +76,9 @@ export class WebhooksController {
     @Query('emisorId') emisorId: string | undefined,
     @CurrentUser() user: JwtPayload,
   ): Promise<WebhookResponseDto[]> {
-    // Si se filtra por emisor, validar acceso tenant
     if (emisorId) {
       await this.emisoresService.validateEmisorAccess(emisorId, user);
     }
-    // SUPERADMIN ve todos, otros ven solo los de su tenant
     if (user.rol === UserRole.SUPERADMIN) {
       return this.webhooksService.findAll(emisorId);
     }
@@ -95,8 +93,11 @@ export class WebhooksController {
     type: WebhookResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Webhook no encontrado' })
-  async findOne(@Param('id') id: string): Promise<WebhookResponseDto> {
-    return this.webhooksService.findOne(id);
+  async findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ): Promise<WebhookResponseDto> {
+    return this.webhooksService.findOneSecured(id, user);
   }
 
   @Post()
@@ -110,11 +111,9 @@ export class WebhooksController {
     @Body() dto: CreateWebhookDto,
     @CurrentUser() user: JwtPayload,
   ): Promise<WebhookResponseDto> {
-    // Si se especifica emisorId, validar acceso tenant
     if (dto.emisorId) {
       await this.emisoresService.validateEmisorAccess(dto.emisorId, user);
     }
-    // Vincular webhook al tenant del usuario
     return this.webhooksService.create(dto, user.tenantId || undefined);
   }
 
@@ -129,7 +128,9 @@ export class WebhooksController {
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateWebhookDto,
+    @CurrentUser() user: JwtPayload,
   ): Promise<WebhookResponseDto> {
+    await this.webhooksService.findOneSecured(id, user);
     return this.webhooksService.update(id, dto);
   }
 
@@ -144,7 +145,11 @@ export class WebhooksController {
     status: 404,
     description: 'Webhook no encontrado o ya inactivo',
   })
-  async delete(@Param('id') id: string): Promise<WebhookResponseDto> {
+  async delete(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ): Promise<WebhookResponseDto> {
+    await this.webhooksService.findOneSecured(id, user);
     return this.webhooksService.delete(id);
   }
 
@@ -156,7 +161,11 @@ export class WebhooksController {
     type: WebhookResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Webhook no encontrado' })
-  async regenerateSecret(@Param('id') id: string): Promise<WebhookResponseDto> {
+  async regenerateSecret(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+  ): Promise<WebhookResponseDto> {
+    await this.webhooksService.findOneSecured(id, user);
     return this.webhooksService.regenerateSecret(id);
   }
 
@@ -181,6 +190,7 @@ export class WebhooksController {
   @ApiResponse({ status: 404, description: 'Webhook no encontrado' })
   async getLogs(
     @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ): Promise<{
@@ -189,6 +199,7 @@ export class WebhooksController {
     page: number;
     totalPages: number;
   }> {
+    await this.webhooksService.findOneSecured(id, user);
     return this.webhooksService.getLogs(
       id,
       Number(page) || 1,

@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import axios from 'axios';
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { PDFDocument } from 'pdf-lib';
+import { URL } from 'url';
+import { isIP } from 'net';
 
 export interface ImageData {
   url: string;
@@ -17,6 +19,30 @@ export interface ImageData {
 @Injectable()
 export class PdfImageService {
   private readonly logger = new Logger(PdfImageService.name);
+
+  private isPrivateUrl(urlStr: string): boolean {
+    try {
+      const parsed = new URL(urlStr);
+      const host = parsed.hostname.toLowerCase();
+      if (host === 'localhost' || host === '0.0.0.0') return true;
+      if (isIP(host)) {
+        const parts = host.split('.');
+        if (parts[0] === '10') return true;
+        if (parts[0] === '127') return true;
+        if (parts[0] === '169' && parts[1] === '254') return true;
+        if (
+          parts[0] === '172' &&
+          parseInt(parts[1]) >= 16 &&
+          parseInt(parts[1]) <= 31
+        )
+          return true;
+        if (parts[0] === '192' && parts[1] === '168') return true;
+      }
+      return false;
+    } catch {
+      return true;
+    }
+  }
 
   /**
    * Add images to an existing PDF
@@ -84,9 +110,15 @@ export class PdfImageService {
             image.url.startsWith('http://') ||
             image.url.startsWith('https://')
           ) {
-            // Get image from URL
+            // SSRF protection: block private/internal IPs
+            if (this.isPrivateUrl(image.url)) {
+              throw new BadRequestException(
+                `URL de imagen no permitida (red interna): ${image.url}`,
+              );
+            }
             const response = await axios.get(image.url, {
               responseType: 'arraybuffer',
+              timeout: 10000,
             });
             imageBytes = Buffer.from(response.data);
           } else {
